@@ -1,0 +1,21 @@
+# Root .gitignore. Each app folder has its own as well (frontend/.gitignore, backend/.gitignore).
+
+# Environment files hold machine-specific settings and secrets. Commit only the examples.
+.env
+.env.*
+!.env.example
+
+# SQLite databases (and their journal / WAL files)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude Code local preview config
+.claude/
