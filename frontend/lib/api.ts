@@ -8,7 +8,13 @@
 // Node.js) and Client Components (which run in the browser). The global `fetch` exists
 // in both environments, so the same code works in both places.
 
-import type { Check, Monitor, MonitorCreateInput, MonitorUpdateInput } from "@/types";
+import type {
+  Check,
+  Monitor,
+  MonitorCreateInput,
+  MonitorStats,
+  MonitorUpdateInput,
+} from "@/types";
 
 // NEXT_PUBLIC_ variables are copied ("inlined") into the browser JavaScript at build
 // time. Never put a secret in one. A plain API_URL would be invisible to the browser.
@@ -134,6 +140,14 @@ async function request<T>(
 
 export function getMonitors(): Promise<Monitor[]> {
   return request<Monitor[]>("/monitors");
+}
+
+export function getMonitor(id: number): Promise<Monitor> {
+  return request<Monitor>(`/monitors/${id}`);
+}
+
+export function getMonitorStats(id: number, hours: number): Promise<MonitorStats> {
+  return request<MonitorStats>(`/monitors/${id}/stats?hours=${hours}`);
 }
 
 export function createMonitor(input: MonitorCreateInput): Promise<Monitor> {

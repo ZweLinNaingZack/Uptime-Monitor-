@@ -8,7 +8,7 @@
 // Props passed from server to client must be serializable (plain JSON-like data).
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import MonitorCard from "@/components/MonitorCard";
 import {
@@ -19,6 +19,7 @@ import {
   updateMonitor,
 } from "@/lib/api";
 import { useNow } from "@/lib/useNow";
+import { usePolling } from "@/lib/usePolling";
 import type { Monitor } from "@/types";
 
 const POLL_INTERVAL_MS = 10_000;
@@ -43,7 +44,7 @@ export default function MonitorList({ initialMonitors, initialError }: MonitorLi
   const refresh = useCallback(() => {
     // State is only set inside the .then callbacks, i.e. when the response arrives,
     // never synchronously during the effect that calls refresh().
-    return getMonitors().then(
+    void getMonitors().then(
       (fresh) => {
         setMonitors(fresh);
         setLoadError(null);
@@ -55,36 +56,9 @@ export default function MonitorList({ initialMonitors, initialError }: MonitorLi
     );
   }, []);
 
-  // Keep the list fresh: refresh on (re)appearing, then poll every 10 seconds.
-  //
-  // Why refresh immediately, even though the server already fetched the list? With
-  // Cache Components, Next.js keeps visited pages alive inside React's <Activity> instead
-  // of unmounting them. When you go to "Add monitor" and come back, this component is
-  // *shown again* with its OLD state; new props from the server don't reset useState.
-  // Activity does clean up effects when hiding and re-run them when showing, so this
-  // effect runs again every time the dashboard comes back into view.
-  useEffect(() => {
-    void refresh();
-
-    const intervalId = setInterval(() => {
-      // Don't poll while the browser tab is in the background: nobody is looking.
-      if (document.visibilityState === "visible") void refresh();
-    }, POLL_INTERVAL_MS);
-
-    // When the user returns to this browser tab, update right away instead of waiting
-    // up to 10 s for the next poll.
-    function handleVisibilityChange() {
-      if (document.visibilityState === "visible") void refresh();
-    }
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    // Cleanup: runs when the component unmounts or is hidden by <Activity>. Forgetting
-    // this would leave timers and listeners running forever, multiplying on every visit.
-    return () => {
-      clearInterval(intervalId);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [refresh]);
+  // Keep the list fresh: refresh on (re)appearing, then every 10 seconds.
+  // See lib/usePolling.ts for why the immediate refresh is needed with Cache Components.
+  usePolling(refresh, POLL_INTERVAL_MS);
 
   function setBusy(id: number, busy: boolean) {
     // Always derive new state from the previous state (the `prev =>` form) and create a
@@ -186,6 +160,7 @@ export default function MonitorList({ initialMonitors, initialError }: MonitorLi
           <MonitorCard
             key={monitor.id}
             monitor={monitor}
+            detailHref={`/monitors/${monitor.id}`}
             now={now}
             busy={busyIds.has(monitor.id)}
             onCheckNow={handleCheckNow}

@@ -6,6 +6,8 @@
 // imported by a Client Component (MonitorList) becomes part of the client bundle too.
 // "use client" marks the *entry point* of client code, not every client file.
 
+import Link from "next/link";
+
 import { formatInterval, formatRelativeTime, getMonitorStatus } from "@/lib/status";
 import type { Monitor, MonitorStatus } from "@/types";
 
@@ -37,6 +39,8 @@ function StatusBadge({ status }: { status: MonitorStatus }) {
 
 interface MonitorCardProps {
   monitor: Monitor;
+  /** If set, the name links here (the dashboard links to the detail page). */
+  detailHref?: string;
   /** Current time from useNow(); null during server render/hydration. */
   now: number | null;
   /** True while an action for this monitor is in flight (disables the buttons). */
@@ -48,6 +52,7 @@ interface MonitorCardProps {
 
 export default function MonitorCard({
   monitor,
+  detailHref,
   now,
   busy,
   onCheckNow,
@@ -62,7 +67,15 @@ export default function MonitorCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <h2 className="truncate font-semibold">{monitor.name}</h2>
+            <h2 className="truncate font-semibold">
+              {detailHref ? (
+                <Link href={detailHref} className="hover:underline">
+                  {monitor.name}
+                </Link>
+              ) : (
+                monitor.name
+              )}
+            </h2>
             <StatusBadge status={status} />
           </div>
           {/* rel="noreferrer" stops the opened site from seeing or controlling this tab. */}

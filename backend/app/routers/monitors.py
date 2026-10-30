@@ -9,18 +9,29 @@ well under a millisecond, so we accept brief blocking inside the async endpoints
 A larger app would use an async driver (e.g. aiosqlite / asyncpg) instead.
 """
 
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, utcnow
 from app.models import Check, Monitor
 from app.scheduler import schedule_monitor, unschedule_monitor
-from app.schemas import CheckOut, MonitorCreate, MonitorOut, MonitorUpdate
+from app.schemas import (
+    CheckOut,
+    MonitorCreate,
+    MonitorOut,
+    MonitorStatsOut,
+    MonitorUpdate,
+    StatsBucketOut,
+)
 from app.services import latest_checks_by_monitor, run_check_for_monitor
+from app.stats import CheckPoint, compute_stats
 from app.url_safety import UnsafeUrlError, assert_url_is_safe
+
+MAX_STATS_HOURS = 24 * 30
 
 router = APIRouter(prefix="/monitors", tags=["monitors"])
 
@@ -47,6 +58,13 @@ def list_monitors(db: DbSession) -> list[MonitorOut]:
     monitors = list(db.scalars(select(Monitor).order_by(Monitor.created_at, Monitor.id)))
     latest = latest_checks_by_monitor(db, [m.id for m in monitors])
     return [_to_out(m, latest.get(m.id)) for m in monitors]
+
+
+@router.get("/{monitor_id}", response_model=MonitorOut)
+def get_monitor(monitor_id: int, db: DbSession) -> MonitorOut:
+    monitor = _get_monitor_or_404(db, monitor_id)
+    latest = latest_checks_by_monitor(db, [monitor.id]).get(monitor.id)
+    return _to_out(monitor, latest)
 
 
 @router.post("", response_model=MonitorOut, status_code=status.HTTP_201_CREATED)
@@ -120,3 +138,55 @@ def list_checks(
         .limit(limit)
     )
     return [CheckOut.model_validate(c) for c in db.scalars(stmt)]
+
+
+@router.get("/{monitor_id}/stats", response_model=MonitorStatsOut)
+def get_monitor_stats(
+    monitor_id: int,
+    db: DbSession,
+    # 1 hour up to 30 days. The frontend offers 24 h, 7 d and 30 d.
+    hours: Annotated[int, Query(ge=1, le=MAX_STATS_HOURS)] = 24,
+) -> MonitorStatsOut:
+    _get_monitor_or_404(db, monitor_id)
+    period_end = utcnow()
+    period_start = period_end - timedelta(hours=hours)
+
+    # Fetch only the three columns we need, not whole Check objects: for a 30-day window
+    # that can be tens of thousands of rows, and building ORM objects for each is slow.
+    # The (monitor_id, checked_at) index makes this WHERE clause fast.
+    rows = db.execute(
+        select(Check.checked_at, Check.is_up, Check.response_ms).where(
+            Check.monitor_id == monitor_id, Check.checked_at >= period_start
+        )
+    ).all()
+    stats = compute_stats(
+        [CheckPoint(checked_at=r.checked_at, is_up=r.is_up, response_ms=r.response_ms) for r in rows],
+        period_end=period_end,
+        hours=hours,
+    )
+    return MonitorStatsOut(
+        monitor_id=monitor_id,
+        period_hours=hours,
+        period_start=stats.period_start,
+        period_end=stats.period_end,
+        bucket_seconds=stats.bucket_seconds,
+        total_checks=stats.total_checks,
+        up_checks=stats.up_checks,
+        down_checks=stats.down_checks,
+        uptime_percent=stats.uptime_percent,
+        avg_response_ms=stats.avg_response_ms,
+        p95_response_ms=stats.p95_response_ms,
+        min_response_ms=stats.min_response_ms,
+        max_response_ms=stats.max_response_ms,
+        buckets=[
+            StatsBucketOut(
+                start=b.start,
+                end=b.end,
+                total_checks=b.total_checks,
+                down_checks=b.down_checks,
+                avg_response_ms=b.avg_response_ms,
+                max_response_ms=b.max_response_ms,
+            )
+            for b in stats.buckets
+        ],
+    )

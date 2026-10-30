@@ -84,5 +84,34 @@ class MonitorOut(CamelModel):
     latest_check: CheckOut | None = None
 
 
+class StatsBucketOut(CamelModel):
+    """One point on the response-time chart: all checks between `start` and `end`."""
+
+    start: UtcDatetime
+    end: UtcDatetime
+    total_checks: int
+    down_checks: int
+    avg_response_ms: int | None  # None = no response in this slice (chart shows a gap)
+    max_response_ms: int | None
+
+
+class MonitorStatsOut(CamelModel):
+    monitor_id: int
+    period_hours: int
+    period_start: UtcDatetime
+    period_end: UtcDatetime
+    bucket_seconds: int
+    total_checks: int
+    up_checks: int
+    down_checks: int
+    # The following are None when the period has no (responding) checks yet.
+    uptime_percent: float | None
+    avg_response_ms: int | None
+    p95_response_ms: int | None
+    min_response_ms: int | None
+    max_response_ms: int | None
+    buckets: list[StatsBucketOut]
+
+
 class HealthOut(CamelModel):
     status: str

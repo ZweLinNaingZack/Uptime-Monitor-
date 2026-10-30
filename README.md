@@ -13,8 +13,9 @@ clever code. The comments explain the "why" behind things that confuse beginners
 | Frontend | Next.js 16 (App Router, Cache Components), React 19, TypeScript (strict), Tailwind CSS 4 |
 | Backend  | Python 3.11+, FastAPI, SQLAlchemy 2, SQLite, httpx, APScheduler 3, Pydantic v2           |
 
-**Status:** Phase 1 (add/delete monitors, "Check now", latest result) and Phase 2
-(scheduler, stored history, auto-refreshing dashboard) are done. See the [roadmap](#roadmap).
+**Status:** Phases 1 to 3 are done: add/delete monitors and "Check now"; the scheduler,
+stored history and auto-refreshing dashboard; and a detail page per monitor with uptime
+and response-time stats, a chart and the check history. See the [roadmap](#roadmap).
 
 ---
 
@@ -109,6 +110,7 @@ Uptime/
 │       ├── checker.py       perform_check(url): one timed HTTP GET -> CheckResult
 │       ├── services.py      run_check_for_monitor(): checker + database, used by API and scheduler
 │       ├── scheduler.py     APScheduler: one job per active monitor
+│       ├── stats.py         compute_stats(): uptime %, avg/p95, chart buckets (pure functions)
 │       └── routers/
 │           └── monitors.py  The /monitors endpoints
 └── frontend/
@@ -116,17 +118,25 @@ Uptime/
     ├── app/
     │   ├── layout.tsx       Root layout (header), Server Component
     │   ├── page.tsx         Dashboard, Server Component; fetches inside <Suspense>
-    │   └── monitors/new/
-    │       └── page.tsx     "Add monitor" page (static)
+    │   ├── not-found.tsx    Shown for unknown URLs and notFound()
+    │   └── monitors/
+    │       ├── new/page.tsx     "Add monitor" page (static)
+    │       └── [id]/page.tsx    Detail page: dynamic route, reads params inside <Suspense>
     ├── components/
     │   ├── MonitorList.tsx          Client Component: owns the list, polls, handles actions
     │   ├── MonitorCard.tsx          Presentational: one monitor's status and buttons
     │   ├── MonitorListSkeleton.tsx  Loading placeholder (Suspense fallback)
-    │   └── AddMonitorForm.tsx       Client Component: the form
+    │   ├── AddMonitorForm.tsx       Client Component: the form
+    │   ├── MonitorDetail.tsx        Client Component: detail page data, period picker, actions
+    │   ├── StatTiles.tsx            Presentational: uptime / avg / p95 / failed checks
+    │   ├── ResponseTimeChart.tsx    Client Component: hand-drawn SVG chart with hover tooltip
+    │   └── CheckHistoryTable.tsx    Presentational: the latest 100 checks
     ├── lib/
     │   ├── api.ts           Every fetch to the backend, ApiError, FastAPI error parsing
-    │   ├── status.ts        Pure helpers: status, "12s ago", "every 5 minutes"
-    │   └── useNow.ts        Ticking clock hook that avoids hydration mismatches
+    │   ├── monitorDetail.ts Detail-page data loading, shared by server and client
+    │   ├── status.ts        Pure helpers: status, "12s ago", "457 ms", "99.95%"
+    │   ├── useNow.ts        Ticking clock hook that avoids hydration mismatches
+    │   └── usePolling.ts    Refresh now + every N seconds + when the tab becomes visible
     └── types/
         └── index.ts         TypeScript mirror of backend/app/schemas.py
 ```
@@ -164,7 +174,15 @@ A Pydantic `alias_generator` translates between them.
 | `PATCH`  | `/monitors/{id}`                  | `{"isActive": false}` pauses, `true` resumes  | `200` monitor; resuming checks immediately   |
 | `DELETE` | `/monitors/{id}`                  |                                               | `204`; its checks are deleted by the database |
 | `POST`   | `/monitors/{id}/check`            |                                               | `200` the new check ("Check now")           |
+| `GET`    | `/monitors/{id}`                  |                                               | `200` one monitor with `latestCheck`, or `404` |
 | `GET`    | `/monitors/{id}/checks`           | `?limit=100` (1 to 1000)                      | `200` checks, newest first                  |
+| `GET`    | `/monitors/{id}/stats`            | `?hours=24` (1 to 720)                        | `200` uptime %, avg/p95/min/max response time, and chart `buckets` |
+
+**Stats details.** Uptime % is up checks ÷ all checks in the period. Response-time
+figures only count checks that got a response (a timeout has no response time). p95 uses
+the nearest-rank method. Values are `null`, not `0`, when there is no data yet. The
+period is split into at most 100 buckets of a "nice" size (24 h → 15 min, 7 d → 2 h,
+30 d → 12 h), aligned to clock times so the chart doesn't shift on every refresh.
 
 Example monitor:
 
@@ -248,7 +266,14 @@ Then follow the two other paths:
 - **Scheduled checks:** `backend/app/main.py` `lifespan` starts the scheduler and calls
   `schedule_all_active_monitors()`. Every interval, APScheduler runs `_scheduled_check`
   in `scheduler.py`, which calls the same `run_check_for_monitor`. The dashboard picks up
-  new results through its 10-second poll in `MonitorList`.
+  new results through its 10-second poll (`usePolling` in `MonitorList`).
+- **Detail page:** `frontend/app/monitors/[id]/page.tsx` awaits the `params` Promise
+  inside `<Suspense>`, validates the id, and calls `fetchMonitorDetail` (`lib/monitorDetail.ts`),
+  which fetches the monitor, stats and history in parallel. On the backend,
+  `get_monitor_stats` (`routers/monitors.py`) selects three columns for the period and
+  hands them to `compute_stats` (`stats.py`). In the browser, `MonitorDetail` keeps it
+  fresh; switching the period changes `hours`, which recreates `refresh`, which restarts
+  `usePolling` and fetches immediately.
 
 ### Questions to think about while reading
 
@@ -276,6 +301,24 @@ Then follow the two other paths:
     FastAPI's OpenAPI schema (`/openapi.json`) instead?
 12. If you ran `uvicorn --workers 4`, how many times would each check run? How would
     you fix that?
+
+Phase 3:
+
+13. `fetchMonitorDetail` lives in `lib/monitorDetail.ts`, not in `MonitorDetail.tsx`.
+    What goes wrong if a Server Component imports a plain function from a
+    `"use client"` file and calls it?
+14. Why does the stats API return `null` instead of `0` when there are no checks? What
+    would the chart and the "Uptime" tile wrongly suggest otherwise?
+15. Why is p95 more useful than the average for response times? Construct 20 response
+    times where the average looks fine but p95 reveals a problem.
+16. `MonitorDetail` numbers each request (`latestRequest`). Click "7 days" then "30 days"
+    quickly: what bug would appear without it? Why is it a `useRef`, not `useState`?
+17. `StatTiles` uses `formatCount` with a fixed `"en-US"` locale instead of
+    `toLocaleString()`. What would a German visitor see in the console otherwise?
+18. Visit `/monitors/999` and check the HTTP status in your browser's network tab. Why is
+    it 200, not 404? (Hint: streaming.)
+19. The chart is hand-written SVG. Find where a millisecond value becomes a pixel
+    (`y = ...`). Why does a bigger value give a *smaller* y?
 
 ---
 
@@ -330,12 +373,11 @@ Built:
 
 - [x] **Phase 1**: add/delete monitors, "Check now", latest result per monitor
 - [x] **Phase 2**: APScheduler job per monitor, stored check history, dashboard polling every 10 s
+- [x] **Phase 3**: `/monitors/[id]` detail page with uptime %, average/p95 response time,
+      a response-time chart with a status strip (24 h / 7 d / 30 d), and the check history
 
 Next (not built yet):
 
-- [ ] **Phase 3: Stats and detail page**: `/monitors/[id]` with uptime %, average/p95
-      response time, a response-time chart and a history table (the
-      `GET /monitors/{id}/checks` endpoint already exists)
 - [ ] **Phase 4: Alerts**: Discord/Telegram notifications when a monitor changes state
       (up to down, down to up), plus a "maintenance" state that suppresses alerts
 - [ ] **Phase 5: Hardening**: rate limiting, authentication, close the DNS-rebinding gap

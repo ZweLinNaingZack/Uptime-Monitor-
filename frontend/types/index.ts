@@ -26,6 +26,35 @@ export interface Monitor {
   latestCheck: Check | null; // null until the first check has finished
 }
 
+/** One point on the response-time chart: every check between `start` and `end`. */
+export interface StatsBucket {
+  start: string;
+  end: string;
+  totalChecks: number;
+  downChecks: number;
+  avgResponseMs: number | null; // null = nothing responded in this slice -> gap in the line
+  maxResponseMs: number | null;
+}
+
+/** GET /monitors/{id}/stats?hours=N */
+export interface MonitorStats {
+  monitorId: number;
+  periodHours: number;
+  periodStart: string;
+  periodEnd: string;
+  bucketSeconds: number;
+  totalChecks: number;
+  upChecks: number;
+  downChecks: number;
+  // null when the period has no data yet ("unknown" is not the same as 0%).
+  uptimePercent: number | null;
+  avgResponseMs: number | null;
+  p95ResponseMs: number | null;
+  minResponseMs: number | null;
+  maxResponseMs: number | null;
+  buckets: StatsBucket[];
+}
+
 // Request bodies
 export interface MonitorCreateInput {
   name: string;

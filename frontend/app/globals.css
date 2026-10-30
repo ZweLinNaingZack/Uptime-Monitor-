@@ -24,3 +24,29 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
+
+/* Chart colours (ResponseTimeChart, CheckHistoryTable).
+   Series blue and status green/red come from a validated palette: both pass colour-blind
+   separation and 3:1 contrast on the card surface in light AND dark mode. Dark mode uses
+   its own steps (not an automatic inversion) because the surface behind them changes. */
+:root {
+  --chart-surface: #ffffff;
+  --chart-series: #2a78d6;
+  --chart-grid: #e1e0d9;
+  --chart-axis: #c3c2b7;
+  --chart-muted: #6b6a66;
+  --chart-no-data: #e7e6e1;
+  --status-good: #0ca30c;
+  --status-critical: #d03b3b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --chart-surface: #18181b; /* matches the cards' dark:bg-zinc-900 */
+    --chart-series: #3987e5;
+    --chart-grid: #2c2c2a;
+    --chart-axis: #383835;
+    --chart-muted: #9a9993;
+    --chart-no-data: #2c2c2a;
+  }
+}
