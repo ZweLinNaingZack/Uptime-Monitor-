@@ -5,6 +5,7 @@ import type { Monitor, MonitorStatus } from "@/types";
 
 export function getMonitorStatus(monitor: Monitor): MonitorStatus {
   if (!monitor.isActive) return "paused";
+  if (monitor.inMaintenance) return "maintenance";
   if (monitor.latestCheck === null) return "pending";
   return monitor.latestCheck.isUp ? "up" : "down";
 }

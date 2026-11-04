@@ -14,6 +14,7 @@ export interface Check {
   isUp: boolean;
   error: string | null;
   checkedAt: string;
+  duringMaintenance: boolean; // shown in history, but excluded from uptime statistics
 }
 
 export interface Monitor {
@@ -22,6 +23,7 @@ export interface Monitor {
   url: string;
   intervalSeconds: number;
   isActive: boolean;
+  inMaintenance: boolean;
   createdAt: string;
   latestCheck: Check | null; // null until the first check has finished
 }
@@ -63,9 +65,38 @@ export interface MonitorCreateInput {
 }
 
 export interface MonitorUpdateInput {
-  isActive: boolean;
+  isActive?: boolean;
+  inMaintenance?: boolean;
+}
+
+export type AlertEventStatus = "pending" | "sent" | "partial" | "failed" | "no_channels";
+
+/** GET /alerts */
+export interface AlertEvent {
+  id: number;
+  monitorId: number;
+  monitorName: string;
+  kind: "down" | "recovered";
+  message: string;
+  status: AlertEventStatus;
+  error: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+/** GET /alerts/channels. Says whether a channel is set up, never what its secret is. */
+export interface AlertChannel {
+  name: string;
+  configured: boolean;
+}
+
+/** POST /alerts/test */
+export interface AlertTestResult {
+  channel: string;
+  ok: boolean;
+  error: string | null;
 }
 
 // What the dashboard shows for a monitor. Derived from Monitor in one place
 // (getMonitorStatus in lib/status.ts) so every component agrees.
-export type MonitorStatus = "up" | "down" | "paused" | "pending";
+export type MonitorStatus = "up" | "down" | "paused" | "maintenance" | "pending";

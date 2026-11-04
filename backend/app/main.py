@@ -11,22 +11,24 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.alerts import configured_channels, drain_alerts, resume_pending_alerts
 from app.config import settings
-from app.database import Base, engine
-from app.routers import monitors
+from app.database import ensure_schema
+from app.routers import alerts, monitors
 from app.scheduler import schedule_all_active_monitors, scheduler
 from app.schemas import HealthOut
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# SECURITY: at INFO level httpx logs every request's full URL. Our alert URLs contain
+# secrets (the Discord webhook and the Telegram bot token), so they must never reach a log.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Code before `yield` runs once at startup, code after it once at shutdown."""
-    # Create tables that don't exist yet. Fine for a learning project; real projects use
-    # migrations (Alembic) so they can also *change* existing tables safely.
-    Base.metadata.create_all(engine)
+    ensure_schema()
 
     # start() must happen inside a running event loop: AsyncIOScheduler attaches itself
     # to the loop that is running when it starts. The lifespan is the first place where
@@ -34,11 +36,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     scheduler.start()
     count = schedule_all_active_monitors()
     logger.info("Scheduler started with %d active monitor(s)", count)
+    logger.info("Alert channels configured: %s", ", ".join(configured_channels()) or "none")
+    resumed = resume_pending_alerts()
+    if resumed:
+        logger.info("Resuming %d undelivered alert(s)", resumed)
 
     yield  # the app serves requests while we're paused here
 
     # wait=False: don't block shutdown waiting for in-flight checks to finish.
     scheduler.shutdown(wait=False)
+    await drain_alerts()
 
 
 app = FastAPI(title="Uptime Monitor API", version="0.1.0", lifespan=lifespan)
@@ -54,6 +61,7 @@ app.add_middleware(
 )
 
 app.include_router(monitors.router)
+app.include_router(alerts.router)
 
 
 @app.get("/health", response_model=HealthOut, tags=["health"])

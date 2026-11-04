@@ -28,9 +28,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col bg-zinc-50 dark:bg-black">
         <header className="border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-          <div className="mx-auto flex max-w-4xl items-center px-4 py-3">
+          <div className="mx-auto flex max-w-4xl items-center justify-between gap-4 px-4 py-3">
             <Link href="/" className="font-semibold tracking-tight">
               Uptime Monitor
+            </Link>
+            <Link href="/alerts" className="text-sm text-zinc-500 hover:underline">
+              Alerts
             </Link>
           </div>
         </header>

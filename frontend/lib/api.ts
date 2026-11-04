@@ -9,6 +9,9 @@
 // in both environments, so the same code works in both places.
 
 import type {
+  AlertChannel,
+  AlertEvent,
+  AlertTestResult,
   Check,
   Monitor,
   MonitorCreateInput,
@@ -169,6 +172,19 @@ export function checkMonitorNow(id: number): Promise<Check> {
 
 export function getChecks(id: number, limit = 100): Promise<Check[]> {
   return request<Check[]>(`/monitors/${id}/checks?limit=${limit}`);
+}
+
+export function getAlertChannels(): Promise<AlertChannel[]> {
+  return request<AlertChannel[]>("/alerts/channels");
+}
+
+export function getAlertEvents(limit = 50): Promise<AlertEvent[]> {
+  return request<AlertEvent[]>(`/alerts?limit=${limit}`);
+}
+
+export function sendTestAlert(): Promise<AlertTestResult[]> {
+  // The backend waits for Discord and Telegram to answer, so allow more than the default.
+  return request<AlertTestResult[]>("/alerts/test", { method: "POST" }, 15_000);
 }
 
 /** Human-readable message for any error thrown by the functions above. */

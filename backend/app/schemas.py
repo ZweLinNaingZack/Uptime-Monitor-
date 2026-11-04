@@ -13,7 +13,15 @@ write code in the other language's style. The TypeScript mirror is frontend/type
 from datetime import UTC, datetime
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, PlainSerializer, StringConstraints
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    PlainSerializer,
+    StringConstraints,
+    model_validator,
+)
 from pydantic.alias_generators import to_camel
 
 from app.models import DEFAULT_INTERVAL_SECONDS, MAX_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS
@@ -58,7 +66,16 @@ class MonitorCreate(CamelModel):
 
 
 class MonitorUpdate(CamelModel):
-    is_active: bool
+    """PATCH body: send only what you want to change, but send at least one field."""
+
+    is_active: bool | None = None
+    in_maintenance: bool | None = None
+
+    @model_validator(mode="after")
+    def _at_least_one_field(self) -> "MonitorUpdate":
+        if self.is_active is None and self.in_maintenance is None:
+            raise ValueError("Provide isActive or inMaintenance.")
+        return self
 
 
 # ---------- Output ----------
@@ -72,6 +89,7 @@ class CheckOut(CamelModel):
     is_up: bool
     error: str | None
     checked_at: UtcDatetime
+    during_maintenance: bool
 
 
 class MonitorOut(CamelModel):
@@ -80,6 +98,7 @@ class MonitorOut(CamelModel):
     url: str
     interval_seconds: int
     is_active: bool
+    in_maintenance: bool
     created_at: UtcDatetime
     latest_check: CheckOut | None = None
 
@@ -111,6 +130,31 @@ class MonitorStatsOut(CamelModel):
     min_response_ms: int | None
     max_response_ms: int | None
     buckets: list[StatsBucketOut]
+
+
+class AlertEventOut(CamelModel):
+    id: int
+    monitor_id: int
+    monitor_name: str
+    kind: str
+    message: str
+    status: str
+    error: str | None
+    created_at: UtcDatetime
+    finished_at: UtcDatetime | None
+
+
+class AlertChannelOut(CamelModel):
+    """Whether a channel is set up. Deliberately has no field for the secret itself."""
+
+    name: str
+    configured: bool
+
+
+class AlertTestResultOut(CamelModel):
+    channel: str
+    ok: bool
+    error: str | None
 
 
 class HealthOut(CamelModel):

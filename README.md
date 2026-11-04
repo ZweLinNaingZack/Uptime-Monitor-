@@ -13,9 +13,10 @@ clever code. The comments explain the "why" behind things that confuse beginners
 | Frontend | Next.js 16 (App Router, Cache Components), React 19, TypeScript (strict), Tailwind CSS 4 |
 | Backend  | Python 3.11+, FastAPI, SQLAlchemy 2, SQLite, httpx, APScheduler 3, Pydantic v2           |
 
-**Status:** Phases 1 to 3 are done: add/delete monitors and "Check now"; the scheduler,
-stored history and auto-refreshing dashboard; and a detail page per monitor with uptime
-and response-time stats, a chart and the check history. See the [roadmap](#roadmap).
+**Status:** Phases 1 to 4 are done: add/delete monitors and "Check now"; the scheduler,
+stored history and auto-refreshing dashboard; a detail page per monitor with uptime and
+response-time stats, a chart and the check history; and Discord/Telegram alerts with a
+maintenance state. See the [roadmap](#roadmap).
 
 ---
 
@@ -80,7 +81,53 @@ add `http://127.0.0.1:8001/` (up) and `http://127.0.0.1:8001/nope` (404, down).
 | `DATABASE_URL`        | `backend/.env`     | `sqlite:///./uptime.db` | SQLAlchemy URL; relative to where uvicorn runs  |
 | `CORS_ORIGINS`        | `backend/.env`     | `http://localhost:3000` | Comma-separated browser origins allowed to call the API |
 | `ALLOW_PRIVATE_URLS`  | `backend/.env`     | `0`                     | `1` disables SSRF protection (local dev only)   |
+| `DISCORD_WEBHOOK_URL` | `backend/.env`     | empty                   | **Secret.** Discord webhook for alerts          |
+| `TELEGRAM_BOT_TOKEN`  | `backend/.env`     | empty                   | **Secret.** Telegram bot token for alerts       |
+| `TELEGRAM_CHAT_ID`    | `backend/.env`     | empty                   | Telegram chat that receives alerts              |
+| `TELEGRAM_API_BASE`   | `backend/.env`     | `https://api.telegram.org` | Only if you run your own Bot API server      |
 | `NEXT_PUBLIC_API_URL` | `frontend/.env.local` | `http://localhost:8000` | Backend URL, used by the server and the browser |
+
+### Setting up alerts
+
+Alerts are optional. You can set up Discord, Telegram, or both, in `backend/.env`. These
+values are passwords: `.env` is git-ignored, so keep them there and never in
+`.env.example`, a commit, or a screenshot.
+
+**Discord**
+
+1. In your server: **channel settings → Integrations → Webhooks → New Webhook**.
+2. Click **Copy Webhook URL** and add it to `backend/.env`:
+   `DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...`
+
+**Telegram**
+
+1. In Telegram, message **@BotFather**, send `/newbot`, and copy the token it gives you
+   into `TELEGRAM_BOT_TOKEN=`.
+2. Send any message to your new bot (or add it to a group).
+3. Open `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in your browser, find
+   `"chat":{"id":...}`, and copy that number into `TELEGRAM_CHAT_ID=`.
+
+**Then** restart the backend, open **Alerts** in the dashboard, and click **Send test
+alert**. A failure shows the reason, for example `HTTP 401` for a wrong token.
+
+### How alerts behave
+
+| Situation | What happens |
+| --------- | ------------ |
+| Up → down | One `DOWN` message |
+| Still down | Nothing more, however many checks fail |
+| Down → up | One `RECOVERED` message |
+| New monitor's first check | Fails: `DOWN`. Works: nothing |
+| Backend restarts | No repeat alerts, because the last state is stored in the database |
+| **Maintenance** on | Checks continue, alerts are silenced, results don't count towards uptime |
+| Broken when maintenance ends | `DOWN` on the next check |
+| Broke and was fixed during maintenance | Nothing |
+| **Paused** monitor | No scheduled checks and no alerts, even from "Check now" |
+| Discord or Telegram is failing | Retried up to 3 times. The outcome appears on the Alerts page |
+| Server stops before sending | Sent at the next start, unless it is over an hour old |
+
+A single failed check sends an alert straight away, so a brief network blip can produce a
+`DOWN` followed by a `RECOVERED`. The roadmap has an option to wait for several failures.
 
 ### Checks before committing
 
@@ -111,14 +158,17 @@ Uptime/
 │       ├── services.py      run_check_for_monitor(): checker + database, used by API and scheduler
 │       ├── scheduler.py     APScheduler: one job per active monitor
 │       ├── stats.py         compute_stats(): uptime %, avg/p95, chart buckets (pure functions)
+│       ├── alerts.py        When to alert, sending to Discord/Telegram, retries, delivery
 │       └── routers/
-│           └── monitors.py  The /monitors endpoints
+│           ├── monitors.py  The /monitors endpoints
+│           └── alerts.py    The /alerts endpoints
 └── frontend/
     ├── next.config.ts       cacheComponents + partialPrefetching enabled
     ├── app/
     │   ├── layout.tsx       Root layout (header), Server Component
     │   ├── page.tsx         Dashboard, Server Component; fetches inside <Suspense>
     │   ├── not-found.tsx    Shown for unknown URLs and notFound()
+    │   ├── alerts/page.tsx  Alerts page: channel status, test button, history
     │   └── monitors/
     │       ├── new/page.tsx     "Add monitor" page (static)
     │       └── [id]/page.tsx    Detail page: dynamic route, reads params inside <Suspense>
@@ -130,7 +180,8 @@ Uptime/
     │   ├── MonitorDetail.tsx        Client Component: detail page data, period picker, actions
     │   ├── StatTiles.tsx            Presentational: uptime / avg / p95 / failed checks
     │   ├── ResponseTimeChart.tsx    Client Component: hand-drawn SVG chart with hover tooltip
-    │   └── CheckHistoryTable.tsx    Presentational: the latest 100 checks
+    │   ├── CheckHistoryTable.tsx    Presentational: the latest 100 checks
+    │   └── AlertsPanel.tsx          Client Component: the Alerts page's data and test button
     ├── lib/
     │   ├── api.ts           Every fetch to the backend, ApiError, FastAPI error parsing
     │   ├── monitorDetail.ts Detail-page data loading, shared by server and client
@@ -152,9 +203,24 @@ url              VARCHAR(2048)             status_code  INTEGER NULL
 interval_seconds INTEGER (30..86400)       response_ms  INTEGER NULL
 is_active        BOOLEAN                   is_up        BOOLEAN
 created_at       DATETIME (UTC)            error        TEXT NULL
-                                           checked_at   DATETIME (UTC)
+in_maintenance   BOOLEAN                   checked_at   DATETIME (UTC)
+alert_state      VARCHAR(10) NULL          during_maintenance BOOLEAN
                                            INDEX (monitor_id, checked_at)
+
+alert_events
+──────────────────────────────────────
+id           INTEGER PK
+monitor_id   INTEGER FK -> monitors.id ON DELETE CASCADE
+kind         "down" | "recovered"
+message      TEXT
+status       "pending" | "sent" | "partial" | "failed" | "no_channels"
+error        TEXT NULL
+created_at   DATETIME (UTC)
+finished_at  DATETIME (UTC) NULL
 ```
+
+**Upgrading an existing database:** just start the backend. `ensure_schema()` in
+`database.py` creates missing tables and adds missing columns without touching your rows.
 
 Timestamps are stored in UTC, sent as ISO strings ending in `Z`, and formatted in the
 browser in the user's timezone.
@@ -171,16 +237,20 @@ A Pydantic `alias_generator` translates between them.
 | `GET`    | `/health`                         |                                               | `200 {"status": "ok"}`                       |
 | `GET`    | `/monitors`                       |                                               | `200` list of monitors, each with `latestCheck` |
 | `POST`   | `/monitors`                       | `{"name", "url", "intervalSeconds"?}`         | `201` monitor (`latestCheck: null`); first check starts immediately. `400` unsafe URL, `422` invalid input |
-| `PATCH`  | `/monitors/{id}`                  | `{"isActive": false}` pauses, `true` resumes  | `200` monitor; resuming checks immediately   |
+| `PATCH`  | `/monitors/{id}`                  | `{"isActive"?: bool, "inMaintenance"?: bool}`, at least one | `200` monitor; resuming checks immediately |
 | `DELETE` | `/monitors/{id}`                  |                                               | `204`; its checks are deleted by the database |
 | `POST`   | `/monitors/{id}/check`            |                                               | `200` the new check ("Check now")           |
 | `GET`    | `/monitors/{id}`                  |                                               | `200` one monitor with `latestCheck`, or `404` |
 | `GET`    | `/monitors/{id}/checks`           | `?limit=100` (1 to 1000)                      | `200` checks, newest first                  |
 | `GET`    | `/monitors/{id}/stats`            | `?hours=24` (1 to 720)                        | `200` uptime %, avg/p95/min/max response time, and chart `buckets` |
+| `GET`    | `/alerts`                         | `?limit=50` (1 to 500)                        | `200` alert history, newest first           |
+| `GET`    | `/alerts/channels`                |                                               | `200` which channels are set up (never the secrets) |
+| `POST`   | `/alerts/test`                    |                                               | `200` per-channel result. `400` if none is set up |
 
 **Stats details.** Uptime % is up checks ÷ all checks in the period. Response-time
 figures only count checks that got a response (a timeout has no response time). p95 uses
-the nearest-rank method. Values are `null`, not `0`, when there is no data yet. The
+the nearest-rank method. Values are `null`, not `0`, when there is no data yet. Checks
+made during maintenance are left out. The
 period is split into at most 100 buckets of a "nice" size (24 h → 15 min, 7 d → 2 h,
 30 d → 12 h), aligned to clock times so the chart doesn't shift on every refresh.
 
@@ -274,6 +344,11 @@ Then follow the two other paths:
   hands them to `compute_stats` (`stats.py`). In the browser, `MonitorDetail` keeps it
   fresh; switching the period changes `hours`, which recreates `refresh`, which restarts
   `usePolling` and fetches immediately.
+- **An alert:** at the end of `run_check_for_monitor` (`services.py`), `_update_alert_state`
+  asks `decide_alert` (`alerts.py`) whether the state changed. If it did, an `AlertEvent`
+  is saved in the same commit as the check. Only after that commit does `dispatch_alert`
+  start a background task, so the check doesn't wait for Discord. `_deliver` then sends
+  the message with no database session open, and saves the outcome in a fresh session.
 
 ### Questions to think about while reading
 
@@ -320,6 +395,26 @@ Phase 3:
 19. The chart is hand-written SVG. Find where a millisecond value becomes a pixel
     (`y = ...`). Why does a bigger value give a *smaller* y?
 
+Phase 4:
+
+20. `main.py` sets the `httpx` logger to WARNING. What would appear in your server log
+    without that line, and why is that dangerous for alerts specifically?
+21. Why are alert errors built from status codes and class names, never `str(exc)`?
+22. `AlertEvent` is saved *before* anything is sent. What could go wrong if you sent
+    first and saved afterwards? What could go wrong with the order used here? (Hint:
+    which failure gives a lost alert, and which gives a duplicate?)
+23. While paused or in maintenance, `alert_state` isn't touched at all. Walk through "the
+    site broke during maintenance and is still broken when it ends". Which line sends
+    the `DOWN`?
+24. Why does `dispatch_alert` keep tasks in `_delivery_tasks`? What can happen to an
+    `asyncio.create_task` result that nothing refers to?
+25. Why are 500 and 429 retried, but 401 isn't?
+26. Why do webhook URLs live in `.env` rather than in a form on the dashboard? What would
+    have to exist first for that form to be safe? (Think about Phase 5, and SSRF.)
+27. `run_check_for_monitor` can take the "Check now" path or the scheduler path. If both
+    finish at nearly the same time, why can't they both send the same `DOWN` alert?
+    (Hint: is there an `await` between reading `alert_state` and committing?)
+
 ---
 
 ## Security notes
@@ -353,6 +448,24 @@ connects. A malicious DNS server can answer with a public IP the first time and
 (a custom transport that pins the IP while keeping the `Host` header and TLS SNI) or
 sending all checks through an egress proxy that enforces the same rule.
 
+### Alert secrets
+
+A Discord webhook URL or Telegram bot token lets anyone holding it post as you, so:
+
+- They are set only through environment variables. No API endpoint accepts or returns
+  them; `GET /alerts/channels` only says whether each channel is set up.
+- They stay out of logs (the `httpx` logger is limited to warnings) and out of stored
+  error messages, which use only status codes and class names.
+- Messages are sent as plain text with Discord mentions disabled, so a monitor named
+  `@everyone` can't ping your whole server.
+
+**If a secret leaks,** replace it: delete the webhook in Discord, or send `/revoke` to
+@BotFather for a Telegram token.
+
+**Known limit:** without a login, anyone who can reach the API can call `POST /alerts/test`
+repeatedly or switch a monitor to maintenance to silence its alerts. Keep the backend on
+localhost until authentication and rate limiting exist (Phase 5).
+
 ### Other notes
 
 - **Input validation**: Pydantic enforces name length (1 to 100), URL format and length,
@@ -375,12 +488,14 @@ Built:
 - [x] **Phase 2**: APScheduler job per monitor, stored check history, dashboard polling every 10 s
 - [x] **Phase 3**: `/monitors/[id]` detail page with uptime %, average/p95 response time,
       a response-time chart with a status strip (24 h / 7 d / 30 d), and the check history
+- [x] **Phase 4**: Discord/Telegram alerts on state changes, retries, alert history, a
+      test button, and a maintenance state
 
 Next (not built yet):
 
-- [ ] **Phase 4: Alerts**: Discord/Telegram notifications when a monitor changes state
-      (up to down, down to up), plus a "maintenance" state that suppresses alerts
 - [ ] **Phase 5: Hardening**: rate limiting, authentication, close the DNS-rebinding gap
-      (IP pinning), Alembic migrations, data retention (prune old checks)
+      (IP pinning), Alembic migrations, data retention (prune old checks), configuring
+      alert channels from the dashboard (safe only once a login exists), and waiting for
+      several failed checks before alerting
 - [ ] **Phase 6: Shipping**: Docker Compose, automated tests (pytest + a frontend test
       runner), CI running lint, type checks, tests and build

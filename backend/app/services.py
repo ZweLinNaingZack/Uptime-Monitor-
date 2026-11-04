@@ -5,16 +5,49 @@ rules for running a check live in exactly one place.
 """
 
 import logging
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.checker import perform_check
+from app.alerts import build_message, decide_alert, dispatch_alert
+from app.checker import CheckResult, perform_check
 from app.database import SessionLocal, utcnow
-from app.models import Check, Monitor
+from app.models import AlertEvent, Check, Monitor
 
 logger = logging.getLogger(__name__)
+
+
+def _update_alert_state(
+    monitor: Monitor, result: CheckResult, checked_at: datetime
+) -> AlertEvent | None:
+    """Compare a result to the monitor's alert state. Returns an event if it changed.
+
+    A paused or in-maintenance monitor leaves `alert_state` completely untouched. That one
+    rule gives the right behaviour when the period ends: the next check compares against
+    the state from BEFORE it. If the site is now broken, you get a DOWN alert; if it broke
+    and was fixed during maintenance, you hear nothing, because nothing changed for you.
+    """
+    if not monitor.is_active or monitor.in_maintenance:
+        return None
+
+    kind = decide_alert(monitor.alert_state, result.is_up)
+    monitor.alert_state = "up" if result.is_up else "down"
+    if kind is None:
+        return None
+    return AlertEvent(
+        monitor_id=monitor.id,
+        kind=kind,
+        message=build_message(
+            kind,
+            monitor.name,
+            monitor.url,
+            checked_at,
+            error=result.error,
+            response_ms=result.response_ms,
+        ),
+    )
 
 
 async def run_check_for_monitor(monitor_id: int) -> Check | None:
@@ -40,7 +73,8 @@ async def run_check_for_monitor(monitor_id: int) -> Check | None:
     # 3) Open a fresh session to save the result.
     with SessionLocal() as db:
         # The monitor may have been deleted while we were waiting on the network.
-        if db.get(Monitor, monitor_id) is None:
+        monitor = db.get(Monitor, monitor_id)
+        if monitor is None:
             logger.info("Monitor %s was deleted during its check; discarding result", monitor_id)
             return None
         check = Check(
@@ -50,8 +84,13 @@ async def run_check_for_monitor(monitor_id: int) -> Check | None:
             is_up=result.is_up,
             error=result.error,
             checked_at=checked_at,
+            during_maintenance=monitor.in_maintenance,
         )
         db.add(check)
+        # Saved in the same commit as the check: either all of it happens or none of it.
+        alert_event = _update_alert_state(monitor, result, checked_at)
+        if alert_event is not None:
+            db.add(alert_event)
         try:
             db.commit()
         except IntegrityError:
@@ -62,7 +101,12 @@ async def run_check_for_monitor(monitor_id: int) -> Check | None:
             db.rollback()
             logger.info("Monitor %s was deleted before its check was saved", monitor_id)
             return None
-        return check
+
+    # Only after the commit, and with the session closed: never hold a database session
+    # during a network call, and never announce something that failed to save.
+    if alert_event is not None:
+        dispatch_alert(alert_event.id)
+    return check
 
 
 def latest_checks_by_monitor(db: Session, monitor_ids: list[int]) -> dict[int, Check]:

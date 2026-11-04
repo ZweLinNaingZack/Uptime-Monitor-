@@ -97,6 +97,13 @@ export default function MonitorDetail({ monitorId, initialData, initialError }: 
     });
   }
 
+  function handleToggleMaintenance(monitor: Monitor) {
+    void runAction(async () => {
+      const updated = await updateMonitor(monitorId, { inMaintenance: !monitor.inMaintenance });
+      setData((prev) => (prev ? { ...prev, monitor: updated } : prev));
+    });
+  }
+
   function handleDelete(monitor: Monitor) {
     if (!window.confirm(`Delete "${monitor.name}" and all of its check history?`)) return;
     void runAction(async () => {
@@ -149,9 +156,17 @@ export default function MonitorDetail({ monitorId, initialData, initialError }: 
           busy={busy}
           onCheckNow={handleCheckNow}
           onTogglePause={handleTogglePause}
+          onToggleMaintenance={handleToggleMaintenance}
           onDelete={handleDelete}
         />
       </ul>
+
+      {monitor.inMaintenance && (
+        <p role="status" className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-200">
+          In maintenance: checks continue, but alerts are silenced and results don&apos;t count
+          towards uptime.
+        </p>
+      )}
 
       {/* Filters go in one row ABOVE everything they affect: tiles, chart and table all
           use the same period, so their numbers always agree. */}
@@ -187,6 +202,9 @@ export default function MonitorDetail({ monitorId, initialData, initialError }: 
             <ChartLegend />
           </div>
           <ResponseTimeChart stats={stats} />
+          <p className="mt-2 text-xs text-zinc-500">
+            Checks made during maintenance are left out of these numbers.
+          </p>
         </section>
       </div>
 

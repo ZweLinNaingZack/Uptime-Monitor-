@@ -103,6 +103,12 @@ export default function MonitorList({ initialMonitors, initialError }: MonitorLi
     });
   }
 
+  function handleToggleMaintenance(monitor: Monitor) {
+    void runAction(monitor, async () => {
+      replaceMonitor(await updateMonitor(monitor.id, { inMaintenance: !monitor.inMaintenance }));
+    });
+  }
+
   function handleDelete(monitor: Monitor) {
     if (!window.confirm(`Delete "${monitor.name}" and all of its check history?`)) return;
     void runAction(monitor, async () => {
@@ -165,6 +171,7 @@ export default function MonitorList({ initialMonitors, initialError }: MonitorLi
             busy={busyIds.has(monitor.id)}
             onCheckNow={handleCheckNow}
             onTogglePause={handleTogglePause}
+            onToggleMaintenance={handleToggleMaintenance}
             onDelete={handleDelete}
           />
         ))}

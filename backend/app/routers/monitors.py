@@ -92,12 +92,20 @@ async def create_monitor(payload: MonitorCreate, db: DbSession) -> MonitorOut:
 @router.patch("/{monitor_id}", response_model=MonitorOut)
 async def update_monitor(monitor_id: int, payload: MonitorUpdate, db: DbSession) -> MonitorOut:
     monitor = _get_monitor_or_404(db, monitor_id)
-    monitor.is_active = payload.is_active
+    if payload.in_maintenance is not None:
+        # Checks keep running during maintenance, so the scheduler is not involved.
+        monitor.in_maintenance = payload.in_maintenance
+    # Only touch the scheduler when the active flag really changes. Otherwise a repeated
+    # {"isActive": true} would trigger an unnecessary extra check each time.
+    active_changed = payload.is_active is not None and payload.is_active != monitor.is_active
+    if payload.is_active is not None:
+        monitor.is_active = payload.is_active
     db.commit()
-    if monitor.is_active:
-        schedule_monitor(monitor.id, monitor.interval_seconds)  # resume: checks right away
-    else:
-        unschedule_monitor(monitor.id)
+    if active_changed:
+        if monitor.is_active:
+            schedule_monitor(monitor.id, monitor.interval_seconds)  # resume: checks right away
+        else:
+            unschedule_monitor(monitor.id)
     latest = latest_checks_by_monitor(db, [monitor.id]).get(monitor.id)
     return _to_out(monitor, latest)
 
@@ -156,7 +164,10 @@ def get_monitor_stats(
     # The (monitor_id, checked_at) index makes this WHERE clause fast.
     rows = db.execute(
         select(Check.checked_at, Check.is_up, Check.response_ms).where(
-            Check.monitor_id == monitor_id, Check.checked_at >= period_start
+            Check.monitor_id == monitor_id,
+            Check.checked_at >= period_start,
+            # Planned downtime shouldn't count against uptime. These slices show as "no data".
+            Check.during_maintenance.is_(False),
         )
     ).all()
     stats = compute_stats(

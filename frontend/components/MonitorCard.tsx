@@ -15,6 +15,7 @@ const BADGE_STYLES: Record<MonitorStatus, { label: string; className: string }> 
   up: { label: "Up", className: "bg-green-100 text-green-800 ring-green-600/20" },
   down: { label: "Down", className: "bg-red-100 text-red-800 ring-red-600/20" },
   paused: { label: "Paused", className: "bg-zinc-100 text-zinc-700 ring-zinc-500/20" },
+  maintenance: { label: "Maintenance", className: "bg-blue-100 text-blue-800 ring-blue-600/20" },
   pending: { label: "Pending", className: "bg-amber-100 text-amber-800 ring-amber-600/20" },
 };
 
@@ -22,6 +23,7 @@ const DOT_STYLES: Record<MonitorStatus, string> = {
   up: "bg-green-500",
   down: "bg-red-500",
   paused: "bg-zinc-400",
+  maintenance: "bg-blue-500",
   pending: "bg-amber-500 animate-pulse",
 };
 
@@ -47,6 +49,7 @@ interface MonitorCardProps {
   busy: boolean;
   onCheckNow: (monitor: Monitor) => void;
   onTogglePause: (monitor: Monitor) => void;
+  onToggleMaintenance: (monitor: Monitor) => void;
   onDelete: (monitor: Monitor) => void;
 }
 
@@ -57,6 +60,7 @@ export default function MonitorCard({
   busy,
   onCheckNow,
   onTogglePause,
+  onToggleMaintenance,
   onDelete,
 }: MonitorCardProps) {
   const status = getMonitorStatus(monitor);
@@ -89,7 +93,7 @@ export default function MonitorCard({
           </a>
         </div>
 
-        <div className="flex shrink-0 gap-2">
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
             onClick={() => onCheckNow(monitor)}
@@ -105,6 +109,15 @@ export default function MonitorCard({
             className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
           >
             {monitor.isActive ? "Pause" : "Resume"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onToggleMaintenance(monitor)}
+            disabled={busy}
+            title="Planned downtime: checks continue, alerts are silenced, and uptime isn't affected."
+            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            {monitor.inMaintenance ? "End maintenance" : "Maintenance"}
           </button>
           <button
             type="button"

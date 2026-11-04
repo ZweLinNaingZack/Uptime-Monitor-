@@ -45,6 +45,7 @@ export default function CheckHistoryTable({ checks, now }: CheckHistoryTableProp
                     aria-hidden="true"
                   />
                   {check.isUp ? "Up" : "Down"}
+                  {check.duringMaintenance && <span className="text-zinc-500">(maintenance)</span>}
                 </span>
               </td>
               <td className="px-4 py-2 text-right">{check.statusCode ?? "—"}</td>
