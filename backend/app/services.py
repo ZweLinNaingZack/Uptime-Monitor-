@@ -11,8 +11,9 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.alerts import build_message, decide_alert, dispatch_alert
+from app.alerts import AlertKind, build_message, decide_alert, dispatch_alert
 from app.checker import CheckResult, perform_check
+from app.config import settings
 from app.database import SessionLocal, utcnow
 from app.models import AlertEvent, Check, Monitor
 
@@ -32,8 +33,18 @@ def _update_alert_state(
     if not monitor.is_active or monitor.in_maintenance:
         return None
 
-    kind = decide_alert(monitor.alert_state, result.is_up)
-    monitor.alert_state = "up" if result.is_up else "down"
+    monitor.consecutive_failures = 0 if result.is_up else monitor.consecutive_failures + 1
+    kind = decide_alert(
+        monitor.alert_state,
+        result.is_up,
+        monitor.consecutive_failures,
+        settings.alert_failure_threshold,
+    )
+    if result.is_up:
+        monitor.alert_state = "up"
+    elif kind is AlertKind.DOWN:
+        # Below the threshold the state stays as it was: you haven't been told it's down.
+        monitor.alert_state = "down"
     if kind is None:
         return None
     return AlertEvent(

@@ -5,6 +5,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
+import { Suspense } from "react";
+
+import HeaderNav from "@/components/HeaderNav";
 
 import "./globals.css";
 
@@ -32,9 +35,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/" className="font-semibold tracking-tight">
               Uptime Monitor
             </Link>
-            <Link href="/alerts" className="text-sm text-zinc-500 hover:underline">
-              Alerts
-            </Link>
+            {/* On a page like /monitors/[id] the path is only known at request time, so
+                HeaderNav's usePathname() can't be part of the prerendered shell. */}
+            <Suspense fallback={null}>
+              <HeaderNav />
+            </Suspense>
           </div>
         </header>
         <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-8">{children}</main>

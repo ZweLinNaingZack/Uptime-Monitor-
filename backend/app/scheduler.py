@@ -24,6 +24,7 @@ from sqlalchemy import select
 
 from app.database import SessionLocal
 from app.models import Monitor
+from app.retention import prune_old_data
 from app.services import run_check_for_monitor
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,29 @@ def unschedule_monitor(monitor_id: int) -> None:
         scheduler.remove_job(_job_id(monitor_id))
     except JobLookupError:
         pass  # already gone (paused monitor, or deleted twice): nothing to do
+
+
+def _scheduled_housekeeping() -> None:
+    try:
+        prune_old_data()
+    except Exception:
+        logger.exception("Housekeeping crashed")
+
+
+def schedule_housekeeping() -> None:
+    """Clean up once now and then once a day.
+
+    `_scheduled_housekeeping` is a plain function, not a coroutine, so APScheduler runs it
+    in a worker thread. A large delete therefore can't freeze the event loop.
+    """
+    scheduler.add_job(
+        _scheduled_housekeeping,
+        trigger=IntervalTrigger(hours=24, timezone=UTC),
+        id="housekeeping",
+        name="delete old data",
+        replace_existing=True,
+        next_run_time=datetime.now(UTC),
+    )
 
 
 def schedule_all_active_monitors() -> int:

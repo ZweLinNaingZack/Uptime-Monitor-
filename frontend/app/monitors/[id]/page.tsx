@@ -17,6 +17,7 @@ import { Suspense } from "react";
 import MonitorDetail from "@/components/MonitorDetail";
 import { ApiError, errorMessage } from "@/lib/api";
 import { DEFAULT_PERIOD_HOURS, fetchMonitorDetail, type MonitorDetailData } from "@/lib/monitorDetail";
+import { forwardedAuth, redirectIfLoggedOut } from "@/lib/serverAuth";
 
 export const metadata: Metadata = {
   title: "Monitor · Uptime Monitor",
@@ -54,8 +55,9 @@ async function MonitorDetailLoader({ params }: { params: Promise<{ id: string }>
   let data: MonitorDetailData | null = null;
   let error: string | null = null;
   try {
-    data = await fetchMonitorDetail(monitorId, DEFAULT_PERIOD_HOURS);
+    data = await fetchMonitorDetail(monitorId, DEFAULT_PERIOD_HOURS, await forwardedAuth());
   } catch (e) {
+    redirectIfLoggedOut(e);
     if (e instanceof ApiError && e.status === 404) notFound();
     error = errorMessage(e); // backend down: let the client component show it and retry
   }

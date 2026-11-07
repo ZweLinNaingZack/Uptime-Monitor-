@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db, utcnow
 from app.models import Check, Monitor
+from app.rate_limit import RateLimit
 from app.scheduler import schedule_monitor, unschedule_monitor
 from app.schemas import (
     CheckOut,
@@ -38,6 +39,10 @@ router = APIRouter(prefix="/monitors", tags=["monitors"])
 # `Annotated[Session, Depends(get_db)]` tells FastAPI: "call get_db() and pass the
 # result in". Giving it a name avoids repeating the Depends(...) in every signature.
 DbSession = Annotated[Session, Depends(get_db)]
+
+# Tighter limits on the two endpoints that make this server send requests to other websites.
+_limit_new_monitors = RateLimit(limit=30, window_seconds=60)
+_limit_check_now = RateLimit(limit=30, window_seconds=60)
 
 
 def _get_monitor_or_404(db: Session, monitor_id: int) -> Monitor:
@@ -67,7 +72,12 @@ def get_monitor(monitor_id: int, db: DbSession) -> MonitorOut:
     return _to_out(monitor, latest)
 
 
-@router.post("", response_model=MonitorOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=MonitorOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(_limit_new_monitors)],
+)
 async def create_monitor(payload: MonitorCreate, db: DbSession) -> MonitorOut:
     # By the time we get here, Pydantic has already validated the body (name length,
     # URL format, interval range) and FastAPI answered 422 if anything was wrong.
@@ -92,6 +102,9 @@ async def create_monitor(payload: MonitorCreate, db: DbSession) -> MonitorOut:
 @router.patch("/{monitor_id}", response_model=MonitorOut)
 async def update_monitor(monitor_id: int, payload: MonitorUpdate, db: DbSession) -> MonitorOut:
     monitor = _get_monitor_or_404(db, monitor_id)
+    maintenance_changed = (
+        payload.in_maintenance is not None and payload.in_maintenance != monitor.in_maintenance
+    )
     if payload.in_maintenance is not None:
         # Checks keep running during maintenance, so the scheduler is not involved.
         monitor.in_maintenance = payload.in_maintenance
@@ -100,6 +113,9 @@ async def update_monitor(monitor_id: int, payload: MonitorUpdate, db: DbSession)
     active_changed = payload.is_active is not None and payload.is_active != monitor.is_active
     if payload.is_active is not None:
         monitor.is_active = payload.is_active
+    if active_changed or maintenance_changed:
+        # "In a row" ends here: a failure from before a pause must not add to one after it.
+        monitor.consecutive_failures = 0
     db.commit()
     if active_changed:
         if monitor.is_active:
@@ -121,7 +137,9 @@ async def delete_monitor(monitor_id: int, db: DbSession) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post("/{monitor_id}/check", response_model=CheckOut)
+@router.post(
+    "/{monitor_id}/check", response_model=CheckOut, dependencies=[Depends(_limit_check_now)]
+)
 async def check_now(monitor_id: int, db: DbSession) -> CheckOut:
     _get_monitor_or_404(db, monitor_id)
     # Release the request's session before the slow network call (see services.py).

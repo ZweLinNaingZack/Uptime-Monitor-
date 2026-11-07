@@ -7,9 +7,12 @@ The module has three parts, from simplest to most involved:
    what happened.
 
 THE MOST IMPORTANT RULE IN THIS FILE: never put a webhook URL or bot token in a log line,
-an error message, or the database. Both are passwords that happen to look like URLs.
+an error message, or an API response. Both are passwords that happen to look like URLs.
 Exception text from HTTP libraries can contain the full URL, so errors here are built
 only from status codes and exception class names, never from `str(exc)`.
+
+The one place they are stored besides `.env` is the alert_channel_settings table, because
+channels set up in the dashboard have to be readable when it's time to send.
 """
 
 import asyncio
@@ -24,7 +27,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import SessionLocal, utcnow
-from app.models import AlertEvent
+from app.models import AlertChannelSetting, AlertEvent
 
 logger = logging.getLogger(__name__)
 
@@ -54,22 +57,27 @@ class AlertStatus(StrEnum):
 # ---------- 1. Pure decisions ----------
 
 
-def decide_alert(previous_state: str | None, is_up: bool) -> AlertKind | None:
+def decide_alert(
+    previous_state: str | None, is_up: bool, consecutive_failures: int = 1, threshold: int = 1
+) -> AlertKind | None:
     """Should this check result trigger an alert?
 
     Alert on CHANGES, not on every failed check, or a site that is down for an hour at a
-    30-second interval would send you 120 messages.
+    30-second interval would send you 120 messages. A failure only counts as a change once
+    `threshold` checks in a row have failed, so one network blip stays quiet.
 
-        previous   now    alert
-        None       up     none       a new monitor working is not news
-        None       down   DOWN       a new monitor failing is
-        up         down   DOWN
-        down       up     RECOVERED
-        same       same   none
+        previous     now                    alert
+        None or up   up                     none
+        None or up   down, below threshold  none       might be a blip
+        None or up   down, at threshold     DOWN
+        down         down                   none       you already know
+        down         up                     RECOVERED
     """
     if is_up:
         return AlertKind.RECOVERED if previous_state == "down" else None
-    return AlertKind.DOWN if previous_state != "down" else None
+    if previous_state == "down" or consecutive_failures < threshold:
+        return None
+    return AlertKind.DOWN
 
 
 def build_message(
@@ -134,21 +142,25 @@ def _retry_after_seconds(response: httpx.Response, default: float) -> float:
     return min(max(seconds, 0.0), MAX_RETRY_AFTER_SECONDS)
 
 
-async def send_discord(client: httpx.AsyncClient, text: str, attempts: int = MAX_ATTEMPTS) -> None:
+async def send_discord(
+    client: httpx.AsyncClient, webhook_url: str, text: str, attempts: int = MAX_ATTEMPTS
+) -> None:
     payload = {
         "content": text,
         # Without this, a monitor named "@everyone" would ping your whole server.
         "allowed_mentions": {"parse": []},
     }
-    await _post_with_retries(client, settings.discord_webhook_url, payload, attempts)
+    await _post_with_retries(client, webhook_url, payload, attempts)
 
 
-async def send_telegram(client: httpx.AsyncClient, text: str, attempts: int = MAX_ATTEMPTS) -> None:
-    url = f"{settings.telegram_api_base}/bot{settings.telegram_bot_token}/sendMessage"
+async def send_telegram(
+    client: httpx.AsyncClient, bot_token: str, chat_id: str, text: str, attempts: int = MAX_ATTEMPTS
+) -> None:
+    url = f"{settings.telegram_api_base}/bot{bot_token}/sendMessage"
     # No parse_mode: Telegram treats the text literally, so characters like "_" in a URL
     # can't break the message or inject formatting.
     payload = {
-        "chat_id": settings.telegram_chat_id,
+        "chat_id": chat_id,
         "text": text,
         "disable_web_page_preview": True,
     }
@@ -158,13 +170,50 @@ async def send_telegram(client: httpx.AsyncClient, text: str, attempts: int = MA
 Sender = Callable[[httpx.AsyncClient, str, int], Awaitable[None]]
 
 
+def channel_sources() -> dict[str, str]:
+    """Which channels are set up, and where from: {"telegram": "dashboard", ...}."""
+    with SessionLocal() as db:
+        saved = set(db.scalars(select(AlertChannelSetting.name)))
+    sources: dict[str, str] = {}
+    if "discord" in saved:
+        sources["discord"] = "dashboard"
+    elif settings.discord_webhook_url:
+        sources["discord"] = "env"
+    if "telegram" in saved:
+        sources["telegram"] = "dashboard"
+    elif settings.telegram_bot_token and settings.telegram_chat_id:
+        sources["telegram"] = "env"
+    return sources
+
+
 def configured_channels() -> dict[str, Sender]:
-    """The channels with complete settings, by name."""
+    """The channels with complete settings, by name. Dashboard values override `.env`.
+
+    The database is read on every call, so saving a new channel in the dashboard works
+    straight away, without a restart.
+    """
+    with SessionLocal() as db:
+        saved = {row.name: row for row in db.scalars(select(AlertChannelSetting))}
+
     channels: dict[str, Sender] = {}
-    if settings.discord_webhook_url:
-        channels["discord"] = send_discord
-    if settings.telegram_bot_token and settings.telegram_chat_id:
-        channels["telegram"] = send_telegram
+    discord_url = saved["discord"].secret if "discord" in saved else settings.discord_webhook_url
+    if discord_url:
+
+        async def discord_sender(client: httpx.AsyncClient, text: str, attempts: int) -> None:
+            await send_discord(client, discord_url, text, attempts)
+
+        channels["discord"] = discord_sender
+
+    if "telegram" in saved:
+        bot_token, chat_id = saved["telegram"].secret, saved["telegram"].chat_id or ""
+    else:
+        bot_token, chat_id = settings.telegram_bot_token, settings.telegram_chat_id
+    if bot_token and chat_id:
+
+        async def telegram_sender(client: httpx.AsyncClient, text: str, attempts: int) -> None:
+            await send_telegram(client, bot_token, chat_id, text, attempts)
+
+        channels["telegram"] = telegram_sender
     return channels
 
 

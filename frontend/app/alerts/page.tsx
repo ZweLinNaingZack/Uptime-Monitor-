@@ -6,6 +6,7 @@ import { Suspense } from "react";
 
 import AlertsPanel from "@/components/AlertsPanel";
 import { errorMessage, getAlertChannels, getAlertEvents } from "@/lib/api";
+import { forwardedAuth, redirectIfLoggedOut } from "@/lib/serverAuth";
 import type { AlertChannel, AlertEvent } from "@/types";
 
 export const metadata: Metadata = {
@@ -33,8 +34,10 @@ async function AlertsLoader() {
   let events: AlertEvent[] = [];
   let error: string | null = null;
   try {
-    [channels, events] = await Promise.all([getAlertChannels(), getAlertEvents()]);
+    const auth = await forwardedAuth();
+    [channels, events] = await Promise.all([getAlertChannels(auth), getAlertEvents(undefined, auth)]);
   } catch (e) {
+    redirectIfLoggedOut(e);
     error = errorMessage(e); // backend down: the client component shows it and retries
   }
   return <AlertsPanel initialChannels={channels} initialEvents={events} initialError={error} />;

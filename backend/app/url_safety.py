@@ -20,14 +20,11 @@ Tricky inputs this handles because we look at the *resolved IP*, not the text:
     number), http://0x7f.1, a public-looking hostname whose DNS points at 10.0.0.5, and
     IPv4-mapped IPv6 such as http://[::ffff:127.0.0.1].
 
-KNOWN GAP: DNS rebinding (time-of-check vs time-of-use)
-    We resolve the name here, and then httpx resolves it AGAIN when it connects. An
-    attacker controlling a DNS server can answer "8.8.8.8" to our check and "127.0.0.1"
-    a millisecond later to httpx (with a TTL of 0). Closing this gap properly means
-    connecting to the exact IP we validated (a custom httpx transport that pins the IP
-    while still sending the original Host header / TLS SNI), or routing all checks
-    through an egress proxy that enforces the same rule. For a learning project we
-    document it; see the README roadmap.
+DNS rebinding, and why this module returns the addresses it checked
+    If we checked a name here and let httpx look it up AGAIN when connecting, an attacker
+    who controls a DNS server could answer "8.8.8.8" to our check and "127.0.0.1" a
+    millisecond later to httpx. So `resolve_safe_addresses` returns the IPs it approved,
+    and checker.py connects to exactly those. There is no second lookup to trick.
 """
 
 import asyncio
@@ -69,6 +66,15 @@ def _resolve_host(host: str, port: int) -> list[IPAddress]:
 
 async def assert_url_is_safe(url: str) -> None:
     """Raise UnsafeUrlError unless `url` is http(s) and resolves only to public IPs."""
+    await resolve_safe_addresses(url)
+
+
+async def resolve_safe_addresses(url: str) -> list[IPAddress]:
+    """Return the public IPs to connect to, or raise UnsafeUrlError.
+
+    An empty list means "no restrictions, connect normally". That only happens with
+    ALLOW_PRIVATE_URLS=1, which also skips the DNS lookup.
+    """
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
         raise UnsafeUrlError("Only http:// and https:// URLs can be monitored.")
@@ -79,7 +85,7 @@ async def assert_url_is_safe(url: str) -> None:
 
     if settings.allow_private_urls:
         # Escape hatch for local development (monitoring http://127.0.0.1:8001 etc).
-        return
+        return []
 
     try:
         port = parts.port or (443 if parts.scheme == "https" else 80)
@@ -104,3 +110,6 @@ async def assert_url_is_safe(url: str) -> None:
             f"'{host}' resolves to a private or reserved address ({blocked[0]}). "
             "Only public internet addresses can be monitored."
         )
+    # A name can list the same address once per protocol; dict.fromkeys drops the repeats
+    # and keeps the order the operating system prefers.
+    return list(dict.fromkeys(addresses))

@@ -6,7 +6,7 @@
 // a plain function or constant imported that way can't be called on the server. Code
 // that both sides need lives in a module without "use client".
 
-import { getChecks, getMonitor, getMonitorStats } from "@/lib/api";
+import { getChecks, getMonitor, getMonitorStats, type RequestAuth } from "@/lib/api";
 import type { Check, Monitor, MonitorStats } from "@/types";
 
 export const PERIODS = [
@@ -25,9 +25,15 @@ export interface MonitorDetailData {
   checks: Check[];
 }
 
-export function fetchMonitorDetail(id: number, hours: number): Promise<MonitorDetailData> {
+export function fetchMonitorDetail(
+  id: number,
+  hours: number,
+  auth?: RequestAuth,
+): Promise<MonitorDetailData> {
   // Promise.all starts the three requests at the same time instead of one after another.
-  return Promise.all([getMonitor(id), getMonitorStats(id, hours), getChecks(id, HISTORY_LIMIT)]).then(
-    ([monitor, stats, checks]) => ({ monitor, stats, checks }),
-  );
+  return Promise.all([
+    getMonitor(id, auth),
+    getMonitorStats(id, hours, auth),
+    getChecks(id, HISTORY_LIMIT, auth),
+  ]).then(([monitor, stats, checks]) => ({ monitor, stats, checks }));
 }

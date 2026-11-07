@@ -1,11 +1,11 @@
 "use client";
-// The interactive part of /alerts. Channels are set up in backend/.env, not here. There is
-// no login yet, so a form that saved webhook URLs would let anyone who can reach the
-// server redirect your alerts. This page can only show the status and send a test.
+// The interactive part of /alerts: channel settings, a test button, and the alert history.
+// The backend only accepts channel changes from someone who is logged in.
 
 import Link from "next/link";
 import { useCallback, useState } from "react";
 
+import ChannelSettingsForm from "@/components/ChannelSettingsForm";
 import { errorMessage, getAlertChannels, getAlertEvents, sendTestAlert } from "@/lib/api";
 import { useNow } from "@/lib/useNow";
 import { usePolling } from "@/lib/usePolling";
@@ -114,9 +114,8 @@ export default function AlertsPanel({ initialChannels, initialEvents, initialErr
 
         {!anyConfigured && (
           <p className="mt-3 text-sm text-zinc-500">
-            Alerts are still recorded below, but nothing is sent. Add a Discord webhook or Telegram
-            bot to <code className="font-mono">backend/.env</code> and restart the backend. The
-            README section &quot;Setting up alerts&quot; has the steps.
+            Alerts are still recorded below, but nothing is sent until you set up a channel. The
+            README section &quot;Setting up alerts&quot; shows where to find these values.
           </p>
         )}
 
@@ -133,6 +132,17 @@ export default function AlertsPanel({ initialChannels, initialEvents, initialErr
             ))}
           </ul>
         )}
+
+        <div className="mt-4 grid gap-6 border-t border-zinc-200 pt-4 sm:grid-cols-2 dark:border-zinc-800">
+          {channels.map((channel) => (
+            <div key={channel.name}>
+              <h3 className="mb-2 text-sm font-semibold">
+                {CHANNEL_LABELS[channel.name] ?? channel.name}
+              </h3>
+              <ChannelSettingsForm channel={channel} onChannelsChange={setChannels} />
+            </div>
+          ))}
+        </div>
       </section>
 
       <section>

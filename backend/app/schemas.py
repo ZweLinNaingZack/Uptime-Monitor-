@@ -78,6 +78,22 @@ class MonitorUpdate(CamelModel):
         return self
 
 
+class LoginIn(CamelModel):
+    password: str
+
+
+# The two bodies below hold secrets, so they are plain strings on purpose. FastAPI's 422
+# error repeats the rejected value in its response, so the strict checks are in
+# routers/alerts.py, where the error message is ours and never includes the value.
+class DiscordChannelIn(CamelModel):
+    webhook_url: str = ""
+
+
+class TelegramChannelIn(CamelModel):
+    bot_token: str = ""
+    chat_id: str = ""
+
+
 # ---------- Output ----------
 
 
@@ -149,6 +165,8 @@ class AlertChannelOut(CamelModel):
 
     name: str
     configured: bool
+    # "dashboard", "env", or None if it isn't set up. Only "dashboard" values can be removed.
+    source: str | None
 
 
 class AlertTestResultOut(CamelModel):

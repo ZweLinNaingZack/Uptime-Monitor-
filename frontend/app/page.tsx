@@ -19,6 +19,7 @@ import { Suspense } from "react";
 import MonitorList from "@/components/MonitorList";
 import MonitorListSkeleton from "@/components/MonitorListSkeleton";
 import { errorMessage, getMonitors } from "@/lib/api";
+import { forwardedAuth, redirectIfLoggedOut } from "@/lib/serverAuth";
 import type { Monitor } from "@/types";
 
 export default function DashboardPage() {
@@ -50,8 +51,9 @@ async function MonitorListLoader() {
   let monitors: Monitor[] | null = null;
   let error: string | null = null;
   try {
-    monitors = await getMonitors();
+    monitors = await getMonitors(await forwardedAuth());
   } catch (e) {
+    redirectIfLoggedOut(e);
     // Backend down? Don't crash the page; let MonitorList show a friendly message.
     error = errorMessage(e);
   }

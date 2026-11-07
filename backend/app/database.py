@@ -8,13 +8,19 @@ SQLAlchemy has two layers worth knowing:
 
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 
-from sqlalchemy import DateTime, create_engine, event, inspect, text
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import DateTime, create_engine, event
 from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.types import TypeDecorator
 
 from app.config import settings
+
+# backend/migrations, found relative to this file so it works from any folder.
+MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
 
 engine = create_engine(
     settings.database_url,
@@ -77,35 +83,16 @@ class UTCDateTime(TypeDecorator[datetime]):
         return value.replace(tzinfo=UTC)
 
 
-# Columns added after the first release: (table, column, SQL definition).
-_ADDED_COLUMNS = (
-    ("monitors", "in_maintenance", "BOOLEAN NOT NULL DEFAULT 0"),
-    ("monitors", "alert_state", "VARCHAR(10)"),
-    ("checks", "during_maintenance", "BOOLEAN NOT NULL DEFAULT 0"),
-)
+def run_migrations() -> None:
+    """Bring the database up to the newest schema. Called once at every startup.
 
-
-def ensure_schema() -> None:
-    """Create missing tables, then add any columns that an older database doesn't have.
-
-    `create_all` only creates tables that don't exist; it never changes existing ones.
-    Without the second step, a database from an earlier version would crash on the first
-    query with "no such column". Adding a column keeps all existing rows, so this is safe
-    to run on every startup. Real projects use a migration tool (Alembic), which also
-    handles renames and removals. It is on the roadmap.
+    Each file in migrations/versions/ is one numbered change to the database. Alembic
+    records the newest one applied in a table called `alembic_version` and runs only the
+    ones after it, so running this when nothing has changed does nothing.
     """
-    Base.metadata.create_all(engine)
-    inspector = inspect(engine)
-    missing = [
-        (table, column, definition)
-        for table, column, definition in _ADDED_COLUMNS
-        if column not in {c["name"] for c in inspector.get_columns(table)}
-    ]
-    with engine.begin() as connection:
-        for table, column, definition in missing:
-            # The names come from the constant above, never from user input, so building
-            # this SQL string is safe here.
-            connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+    config = Config()
+    config.set_main_option("script_location", str(MIGRATIONS_DIR))
+    command.upgrade(config, "head")
 
 
 def get_db() -> Iterator[Session]:

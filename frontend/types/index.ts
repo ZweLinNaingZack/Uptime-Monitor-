@@ -88,6 +88,7 @@ export interface AlertEvent {
 export interface AlertChannel {
   name: string;
   configured: boolean;
+  source: "dashboard" | "env" | null; // only "dashboard" settings can be removed from the page
 }
 
 /** POST /alerts/test */

@@ -101,17 +101,34 @@ function parseErrorBody(
 // fetch() has no timeout by default: if the backend accepts the connection but never
 // answers, the request (and the dashboard's loading skeleton) would wait forever.
 const DEFAULT_TIMEOUT_MS = 8_000;
+const LOGIN_PATH = "/auth/login";
+
+/**
+ * How a Server Component proves it is logged in. In the browser the cookie is sent
+ * automatically. On the Next.js server there's no browser, so the page has to pass along
+ * the cookie it received (see lib/serverAuth.ts).
+ */
+export interface RequestAuth {
+  cookie?: string;
+}
 
 async function request<T>(
   path: string,
   init: RequestInit = {},
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  auth: RequestAuth = {},
 ): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`${API_URL}${path}`, {
       ...init,
-      headers: { "Content-Type": "application/json", ...init.headers },
+      // Cookies are left off cross-origin requests unless you ask. "include" asks.
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...(auth.cookie ? { Cookie: auth.cookie } : {}),
+        ...init.headers,
+      },
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
@@ -121,6 +138,15 @@ async function request<T>(
       throw new ApiError(`The backend at ${API_URL} did not answer within ${timeoutMs / 1000}s.`, 0);
     }
     throw new ApiError(`Cannot reach the backend at ${API_URL}. Is it running?`, 0);
+  }
+
+  // A 401 from any call but login itself means the session ended, so go to the login page.
+  // `window` only exists in the browser. On the server, lib/serverAuth.ts does the redirect.
+  if (response.status === 401 && path !== LOGIN_PATH && typeof window !== "undefined") {
+    // This file isn't a component, so it has no router. A full page load also clears
+    // anything Next.js cached while logged in.
+    // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+    window.location.assign("/login");
   }
 
   if (!response.ok) {
@@ -141,16 +167,24 @@ async function request<T>(
 
 // ---------- Public API, one function per endpoint ----------
 
-export function getMonitors(): Promise<Monitor[]> {
-  return request<Monitor[]>("/monitors");
+export function login(password: string): Promise<void> {
+  return request<void>(LOGIN_PATH, { method: "POST", body: JSON.stringify({ password }) });
 }
 
-export function getMonitor(id: number): Promise<Monitor> {
-  return request<Monitor>(`/monitors/${id}`);
+export function logout(): Promise<void> {
+  return request<void>("/auth/logout", { method: "POST" });
 }
 
-export function getMonitorStats(id: number, hours: number): Promise<MonitorStats> {
-  return request<MonitorStats>(`/monitors/${id}/stats?hours=${hours}`);
+export function getMonitors(auth?: RequestAuth): Promise<Monitor[]> {
+  return request<Monitor[]>("/monitors", {}, DEFAULT_TIMEOUT_MS, auth);
+}
+
+export function getMonitor(id: number, auth?: RequestAuth): Promise<Monitor> {
+  return request<Monitor>(`/monitors/${id}`, {}, DEFAULT_TIMEOUT_MS, auth);
+}
+
+export function getMonitorStats(id: number, hours: number, auth?: RequestAuth): Promise<MonitorStats> {
+  return request<MonitorStats>(`/monitors/${id}/stats?hours=${hours}`, {}, DEFAULT_TIMEOUT_MS, auth);
 }
 
 export function createMonitor(input: MonitorCreateInput): Promise<Monitor> {
@@ -170,16 +204,34 @@ export function checkMonitorNow(id: number): Promise<Check> {
   return request<Check>(`/monitors/${id}/check`, { method: "POST" }, 15_000);
 }
 
-export function getChecks(id: number, limit = 100): Promise<Check[]> {
-  return request<Check[]>(`/monitors/${id}/checks?limit=${limit}`);
+export function getChecks(id: number, limit = 100, auth?: RequestAuth): Promise<Check[]> {
+  return request<Check[]>(`/monitors/${id}/checks?limit=${limit}`, {}, DEFAULT_TIMEOUT_MS, auth);
 }
 
-export function getAlertChannels(): Promise<AlertChannel[]> {
-  return request<AlertChannel[]>("/alerts/channels");
+export function getAlertChannels(auth?: RequestAuth): Promise<AlertChannel[]> {
+  return request<AlertChannel[]>("/alerts/channels", {}, DEFAULT_TIMEOUT_MS, auth);
 }
 
-export function getAlertEvents(limit = 50): Promise<AlertEvent[]> {
-  return request<AlertEvent[]>(`/alerts?limit=${limit}`);
+export function getAlertEvents(limit = 50, auth?: RequestAuth): Promise<AlertEvent[]> {
+  return request<AlertEvent[]>(`/alerts?limit=${limit}`, {}, DEFAULT_TIMEOUT_MS, auth);
+}
+
+export function saveDiscordChannel(webhookUrl: string): Promise<AlertChannel[]> {
+  return request<AlertChannel[]>("/alerts/channels/discord", {
+    method: "PUT",
+    body: JSON.stringify({ webhookUrl }),
+  });
+}
+
+export function saveTelegramChannel(botToken: string, chatId: string): Promise<AlertChannel[]> {
+  return request<AlertChannel[]>("/alerts/channels/telegram", {
+    method: "PUT",
+    body: JSON.stringify({ botToken, chatId }),
+  });
+}
+
+export function removeChannel(name: string): Promise<AlertChannel[]> {
+  return request<AlertChannel[]>(`/alerts/channels/${name}`, { method: "DELETE" });
 }
 
 export function sendTestAlert(): Promise<AlertTestResult[]> {

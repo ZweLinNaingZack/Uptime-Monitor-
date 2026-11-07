@@ -39,6 +39,9 @@ class Monitor(Base):
     # The state the alert system last accepted: "up", "down", or None before the first
     # check. It lives in the database so a restart can't cause a repeated alert.
     alert_state: Mapped[str | None] = mapped_column(String(10))
+    # Failed checks in a row. A DOWN alert waits until this reaches ALERT_FAILURE_THRESHOLD,
+    # so one network blip doesn't wake you up.
+    consecutive_failures: Mapped[int] = mapped_column(default=0, server_default="0")
 
     # passive_deletes=True: "the database will delete the child rows (ON DELETE CASCADE),
     # so don't load every check into memory just to delete them one by one."
@@ -100,3 +103,35 @@ class AlertEvent(Base):
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     monitor: Mapped[Monitor] = relationship(back_populates="alert_events")
+
+
+class AuthSession(Base):
+    """One logged-in browser.
+
+    The browser's cookie holds a long random token, and this table holds only its SHA-256
+    hash. If someone gets a copy of the database, they still can't log in, because a hash
+    can't be turned back into the token. Keeping sessions here also means logging out
+    really ends the session, and a backend restart doesn't log you out.
+    """
+
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
+
+
+class AlertChannelSetting(Base):
+    """An alert channel configured from the dashboard. It overrides the value in `.env`.
+
+    SECURITY: `secret` is a webhook URL or bot token stored as plain text, because the app
+    must be able to read it back to send alerts. Protect uptime.db like you protect `.env`.
+    """
+
+    __tablename__ = "alert_channel_settings"
+
+    name: Mapped[str] = mapped_column(String(20), primary_key=True)  # "discord" or "telegram"
+    secret: Mapped[str] = mapped_column(Text)
+    chat_id: Mapped[str | None] = mapped_column(String(100))  # Telegram only
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
