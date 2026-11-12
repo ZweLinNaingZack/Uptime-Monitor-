@@ -1,0 +1,12 @@
+# Files Docker never copies into the image. Secrets and local data above all.
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+tests/

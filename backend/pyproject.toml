@@ -1,0 +1,6 @@
+# Settings for tools. The app itself is installed from requirements.txt, not from here.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Treat warnings as errors in our own code, so deprecations get noticed early.
+filterwarnings = ["error::DeprecationWarning:app.*"]

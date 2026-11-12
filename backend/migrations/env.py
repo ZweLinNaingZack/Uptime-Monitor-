@@ -1,14 +1,18 @@
 """How Alembic connects to the database. It runs for every Alembic command.
 
-We reuse the app's engine, so migrations always touch the same database as the app.
+Normally we reuse the app's engine, so migrations always touch the same database as the
+app. A caller can pass its own connection instead (the tests do, to migrate a separate
+database file) through `config.attributes["connection"]`.
 """
 
 from alembic import context
+from sqlalchemy.engine import Connection
 
 import app.models  # noqa: F401  (importing registers every table on Base.metadata)
 from app.database import Base, engine
 
-with engine.connect() as connection:
+
+def run_migrations(connection: Connection) -> None:
     context.configure(
         connection=connection,
         # Lets `alembic revision --autogenerate` compare the models with the real database.
@@ -19,3 +23,11 @@ with engine.connect() as connection:
     )
     with context.begin_transaction():
         context.run_migrations()
+
+
+given_connection = context.config.attributes.get("connection")
+if given_connection is not None:
+    run_migrations(given_connection)
+else:
+    with engine.connect() as connection:
+        run_migrations(connection)

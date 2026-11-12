@@ -1,0 +1,44 @@
+# Run the whole app with one command:  docker compose up --build
+# Then open http://localhost:3000. Your password and alert settings come from backend/.env.
+
+services:
+  backend:
+    build: ./backend
+    env_file:
+      # ADMIN_PASSWORD, alert channels and the other settings. Without the file the backend
+      # still starts, but stays locked until a password is set.
+      - path: ./backend/.env
+        required: false
+    environment:
+      # These override backend/.env, because they must be right for the container.
+      DATABASE_URL: sqlite:////data/uptime.db
+      CORS_ORIGINS: http://localhost:3000
+    volumes:
+      # A named volume keeps the database when the container is replaced or rebuilt.
+      - uptime-data:/data
+    ports:
+      # 127.0.0.1 means only this computer can connect. Remove it to let your network in,
+      # but only with HTTPS in front and COOKIE_SECURE=1 (see "Security notes" in the README).
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # How your browser reaches the backend: through the port published above.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    environment:
+      # How the Next.js server reaches the backend: by its service name, over Docker's
+      # internal network. "localhost" here would mean the frontend container itself.
+      API_INTERNAL_URL: http://backend:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      backend:
+        # Wait for the backend's HEALTHCHECK to pass, not merely for it to start.
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  uptime-data:

@@ -1,0 +1,9 @@
+# Files Docker never copies into the build. node_modules is installed fresh inside the
+# image, because packages built for Windows don't work on Linux.
+node_modules/
+.next/
+coverage/
+.env*
+!.env.example
+*.tsbuildinfo
+next-env.d.ts

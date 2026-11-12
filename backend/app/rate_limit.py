@@ -23,6 +23,9 @@ from fastapi import HTTPException, Request, status
 # Past this many tracked IPs we sweep out idle ones, so memory can't grow without limit.
 _MAX_TRACKED_KEYS = 10_000
 
+# Every limiter ever created, so the tests can start each one from zero.
+_ALL_LIMITERS: list["SlidingWindowLimiter"] = []
+
 
 class SlidingWindowLimiter:
     def __init__(self, limit: int, window_seconds: float) -> None:
@@ -31,6 +34,7 @@ class SlidingWindowLimiter:
         self._hits: defaultdict[str, deque[float]] = defaultdict(deque)
         # Plain `def` endpoints run in worker threads, so two can arrive here at once.
         self._lock = threading.Lock()
+        _ALL_LIMITERS.append(self)
 
     def _recent(self, key: str, now: float) -> deque[float]:
         hits = self._hits[key]
@@ -66,6 +70,13 @@ class SlidingWindowLimiter:
         for key in list(self._hits):
             if not self._recent(key, now):
                 del self._hits[key]
+
+
+def reset_all_limiters() -> None:
+    """Forget every count. Used by the tests, so one test's requests can't block the next."""
+    for limiter in _ALL_LIMITERS:
+        with limiter._lock:
+            limiter._hits.clear()
 
 
 def client_ip(request: Request) -> str:

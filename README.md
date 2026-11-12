@@ -13,15 +13,43 @@ clever code. The comments explain the "why" behind things that confuse beginners
 | Frontend | Next.js 16 (App Router, Cache Components), React 19, TypeScript (strict), Tailwind CSS 4 |
 | Backend  | Python 3.11+, FastAPI, SQLAlchemy 2, SQLite, httpx, APScheduler 3, Pydantic v2           |
 
-**Status:** Phases 1 to 5 are done: add/delete monitors and "Check now"; the scheduler,
+**Status:** All six phases are done: add/delete monitors and "Check now"; the scheduler,
 stored history and auto-refreshing dashboard; a detail page per monitor with uptime and
 response-time stats, a chart and the check history; Discord/Telegram alerts with a
-maintenance state; and hardening: a login, rate limits, database migrations and cleanup of
-old data. See the [roadmap](#roadmap).
+maintenance state; hardening (a login, rate limits, database migrations, cleanup of old
+data); and shipping: Docker Compose, automated tests and CI. See the [roadmap](#roadmap).
 
 ---
 
 ## Running it
+
+There are two ways: with Docker (one command, nothing else to install), or directly on your
+machine (better while you're changing the code).
+
+### With Docker
+
+You need [Docker Desktop](https://www.docker.com/products/docker-desktop/) or Docker Engine
+with Compose.
+
+1. Create `backend/.env` from `backend/.env.example` and set `ADMIN_PASSWORD` (and your
+   alert channels, if any). `DATABASE_URL` and `CORS_ORIGINS` in that file are ignored here.
+2. From the project folder, run:
+
+   ```bash
+   docker compose up --build
+   ```
+
+3. Open http://localhost:3000 and log in.
+
+The database lives in a Docker volume called `uptime-data`, so it survives restarts and
+rebuilds. `docker compose down` stops everything and keeps the data; `docker compose down
+--volumes` deletes the data too. Both ports only accept connections from your own computer.
+
+Inside Docker, `localhost` means the container itself, so a monitor for
+`http://localhost:5173` checks the container, not your computer. Use
+`http://host.docker.internal:5173` (with `ALLOW_PRIVATE_URLS=1`) to reach your computer.
+
+### Directly on your machine
 
 You need **Python 3.11+** and **Node.js 20+**. Run the backend and frontend in two terminals.
 
@@ -104,7 +132,8 @@ add `http://127.0.0.1:8001/` (up) and `http://127.0.0.1:8001/nope` (404, down).
 | `TELEGRAM_BOT_TOKEN`  | `backend/.env`     | empty                   | **Secret.** Telegram bot token for alerts. The Alerts page can override it |
 | `TELEGRAM_CHAT_ID`    | `backend/.env`     | empty                   | Telegram chat that receives alerts              |
 | `TELEGRAM_API_BASE`   | `backend/.env`     | `https://api.telegram.org` | Only if you run your own Bot API server      |
-| `NEXT_PUBLIC_API_URL` | `frontend/.env.local` | `http://localhost:8000` | Backend URL, used by the server and the browser |
+| `NEXT_PUBLIC_API_URL` | `frontend/.env.local` | `http://localhost:8000` | Backend URL for the browser (and the server, unless the next row is set). Built into the JavaScript, so changing it needs a rebuild |
+| `API_INTERNAL_URL`    | frontend environment | empty                | Backend URL for the Next.js server only. Docker Compose sets it to `http://backend:8000` |
 
 ### Setting up alerts
 
@@ -154,14 +183,41 @@ Waiting has a cost: at a 5-minute interval, a `DOWN` alert arrives up to 10 minu
 site breaks. Set `ALERT_FAILURE_THRESHOLD=1` if you'd rather hear immediately and put up with
 the odd false alarm. Pausing a monitor or switching maintenance resets the count.
 
-### Checks before committing
+### Tests and checks
+
+GitHub runs all of these on every push (see `.github/workflows/ci.yml`). Run them yourself
+before committing, so a problem shows up on your machine first.
+
+Backend, from `backend/` with the virtual environment active (install the test tools once
+with `pip install -r requirements-dev.txt`):
 
 ```bash
-cd frontend
-npx tsc --noEmit
+python -m pytest
+```
+
+Frontend, from `frontend/`:
+
+```bash
 npm run lint
+```
+
+```bash
+npm test
+```
+
+```bash
 npm run build
 ```
+
+```bash
+npx tsc --noEmit
+```
+
+`npm run test:watch` reruns the frontend tests every time you save a file.
+
+The tests never use the network or your real settings: `backend/tests/conftest.py` sets its
+own password and an empty database, and replaces DNS, website checks and alert sending with
+fakes. So they're fast, give the same result every time, and can't message your channels.
 
 ---
 
@@ -169,11 +225,17 @@ npm run build
 
 ```
 Uptime/
+├── docker-compose.yml       Runs backend + frontend together: `docker compose up --build`
+├── .github/workflows/ci.yml Tests, lint, type check, build and Docker on every push
 ├── backend/
-│   ├── requirements.txt
+│   ├── requirements.txt     What the app needs
+│   ├── requirements-dev.txt ...plus the test tools
+│   ├── pyproject.toml       pytest settings
+│   ├── Dockerfile           The backend image
 │   ├── .env.example
 │   ├── alembic.ini          Settings for the `alembic` command
 │   ├── migrations/          Database changes, one numbered file each (versions/)
+│   ├── tests/               pytest: conftest.py (fakes and fixtures) and one file per area
 │   └── app/
 │       ├── main.py          FastAPI app: lifespan (migrate, start scheduler), CORS, routes
 │       ├── config.py        Settings read from environment variables / .env
@@ -194,7 +256,10 @@ Uptime/
 │           ├── monitors.py  The /monitors endpoints
 │           └── alerts.py    The /alerts endpoints
 └── frontend/
-    ├── next.config.ts       cacheComponents + partialPrefetching enabled
+    ├── next.config.ts       cacheComponents + partialPrefetching; standalone output in Docker
+    ├── vitest.config.mts    Vitest settings
+    ├── Dockerfile           The frontend image (three stages)
+    ├── __tests__/           Vitest: helpers, the API client, and a component
     ├── proxy.ts             Sends visitors with no session cookie to /login
     ├── app/
     │   ├── layout.tsx       Root layout (header), Server Component
@@ -496,6 +561,18 @@ Phase 5:
 34. `lib/serverAuth.ts` starts with `import "server-only"`. What would happen, and when,
     if a Client Component imported it? Why is a failed build better than the alternative?
 
+Phase 6:
+
+35. `tests/conftest.py` sets environment variables *before* `from app...` imports. What
+    would go wrong if the imports came first? (Hint: when is `settings` created?)
+36. The API tests replace `schedule_monitor` with a function that only records its calls.
+    What would make a test that counts checks fail "sometimes" without that?
+37. Why does the frontend need both `NEXT_PUBLIC_API_URL` and `API_INTERNAL_URL` under
+    Docker? Which one ends up in the JavaScript your browser downloads?
+38. Each Dockerfile copies the dependency list and installs it *before* copying the code.
+    What does that save each time you change one line of code and rebuild?
+39. In `ci.yml`, why does `npm run build` come before `npx tsc --noEmit`?
+
 ---
 
 ## Security notes
@@ -600,8 +677,12 @@ Built:
 - [x] **Phase 5**: a login, rate limits, IP pinning against DNS rebinding, Alembic
       migrations, deleting old data, alert channels set from the dashboard, and waiting for
       several failed checks before alerting
+- [x] **Phase 6**: Docker Compose, automated tests (pytest and Vitest), and CI running
+      lint, type checks, tests, the build and the Docker images
 
-Next (not built yet):
+Ideas for later:
 
-- [ ] **Phase 6: Shipping**: Docker Compose, automated tests (pytest + a frontend test
-      runner), CI running lint, type checks, tests and build
+- [ ] HTTPS in the Docker setup, with a reverse proxy such as Caddy
+- [ ] Browser tests (Playwright) for the full login → dashboard flow
+- [ ] More checks than "does it answer": expected text in the page, or a certificate
+      that's about to expire

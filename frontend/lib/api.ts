@@ -20,11 +20,16 @@ import type {
 } from "@/types";
 
 // NEXT_PUBLIC_ variables are copied ("inlined") into the browser JavaScript at build
-// time. Never put a secret in one. A plain API_URL would be invisible to the browser.
-export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(
-  /\/+$/,
-  "",
-);
+// time. Never put a secret in one.
+const PUBLIC_API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+// The backend's address can be different for the Next.js server than for your browser.
+// In Docker, "localhost" inside the frontend container is that container itself, so the
+// server reaches the backend by its service name instead (API_INTERNAL_URL=http://backend:8000).
+// Variables without NEXT_PUBLIC_ are never sent to the browser, so there it is undefined
+// and the public address is used.
+const isServer = typeof window === "undefined";
+export const API_URL = ((isServer && process.env.API_INTERNAL_URL) || PUBLIC_API_URL).replace(/\/+$/, "");
 
 /** A failed API call. `status` is 0 when the backend could not be reached at all. */
 export class ApiError extends Error {
